@@ -57,7 +57,7 @@ bool UWB_DW1000::configure(uint8_t channel, uint8_t preambleCode, uint16_t pream
     if (dataRate == 0) config.dataRate = DataRate::RATE_850KBPS;
     else config.dataRate = DataRate::RATE_6800KBPS;
 
-    config.pulseFreq = PulseFrequency::FREQ_16MHZ;
+    config.pulseFreq = PulseFrequency::FREQ_64MHZ;
     
     if (preambleLength <= 64) config.preambleLen = PreambleLength::LEN_64;
     else if (preambleLength <= 128) config.preambleLen = PreambleLength::LEN_128;
@@ -95,10 +95,19 @@ bool UWB_DW1000::startReceive() {
 
 bool UWB_DW1000::readReceivedData(uint8_t* buffer, uint16_t& length) {
     length = DW1000Ng::getReceivedDataLength();
+
     if (length > 0) {
         DW1000Ng::getReceivedData((byte*)buffer, length);
+
+        // DW1000 does NOT continue RX automatically when RXAUTR is disabled.
+        // Re-enable RX after payload has been copied.
+        DW1000Ng::startReceive();
+
         return true;
     }
+
+    // Recovery: if callback happened but length is invalid, still go back to RX.
+    DW1000Ng::startReceive();
     return false;
 }
 
@@ -154,7 +163,13 @@ void UWB_DW1000::handleError() {
 }
 
 void UWB_DW1000::handleReceiveFailed() {
+    if (_instance) {
+        DW1000Ng::startReceive();
+    }
 }
 
 void UWB_DW1000::handleReceiveTimeout() {
+    if (_instance) {
+        DW1000Ng::startReceive();
+    }
 }

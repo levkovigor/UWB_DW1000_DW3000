@@ -2,7 +2,7 @@
 #include "src/UWB_Core.h"
 
 // IMPORTANT: Set to 1000 for DW1000, or 3000 for DW3000
-#define UWB_MODULE 3000
+#define UWB_MODULE 1000
 
 #if UWB_MODULE == 3000
 #include "src/UWB_DW3000.h"
