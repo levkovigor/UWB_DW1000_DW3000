@@ -20,6 +20,14 @@ public:
     
     // Transmission
     virtual bool transmit(const uint8_t* data, uint16_t length) = 0;
+
+    // Delayed TX is required for accurate TWR ranging.
+    // calculateDelayedTransmitTimestamp() returns the expected RMARKER TX timestamp.
+    // transmitDelayedAt() sends at that timestamp using the chip delayed-TX hardware.
+    virtual uint64_t calculateDelayedTransmitTimestamp(uint64_t referenceTimestamp, uint32_t delayUwbTicks) = 0;
+    virtual bool transmitDelayedAt(const uint8_t* data, uint16_t length, uint64_t delayedTxTimestamp) = 0;
+    virtual void setAntennaDelay(uint16_t delay) = 0;
+    virtual uint16_t getTxAntennaDelay() = 0;
     
     // Reception
     virtual bool startReceive() = 0;

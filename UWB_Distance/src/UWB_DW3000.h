@@ -12,6 +12,10 @@ public:
     bool configure(uint8_t channel = 5, uint8_t preambleCode = 9, uint16_t preambleLength = 128, uint8_t dataRate = 1) override;
     
     bool transmit(const uint8_t* data, uint16_t length) override;
+    uint64_t calculateDelayedTransmitTimestamp(uint64_t referenceTimestamp, uint32_t delayUwbTicks) override;
+    bool transmitDelayedAt(const uint8_t* data, uint16_t length, uint64_t delayedTxTimestamp) override;
+    void setAntennaDelay(uint16_t delay) override;
+    uint16_t getTxAntennaDelay() override;
     bool startReceive() override;
     bool readReceivedData(uint8_t* buffer, uint16_t& length) override;
 
@@ -33,6 +37,9 @@ private:
 
     uint8_t internalRxBuffer[1024];
     uint16_t internalRxLength = 0;
+    uint16_t antennaDelay = 16385;
+
+    bool prepareTxFrame(const uint8_t* data, uint16_t length);
 
     static UWB_DW3000* _instance;
 };

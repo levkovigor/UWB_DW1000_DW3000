@@ -6,6 +6,8 @@
 #include "qorvo/dw3000_device_api.h"
 #include "qorvo/dw3000_vals.h"
 
+static constexpr uint64_t UWB40_MASK = 0xFFFFFFFFFFULL;
+
 extern HardwareSerial Serial;
 
 UWB_DW3000* UWB_DW3000::_instance = nullptr;
@@ -82,8 +84,8 @@ bool UWB_DW3000::configure(uint8_t channel, uint8_t preambleCode, uint16_t pream
     dwt_configure(&config);
     dwt_setdblrxbuffmode(DBL_BUF_STATE_DIS, DBL_BUF_MODE_MAN);
 
-    // DW3000Ng handles TX Power based on channel selection, but we hardcoded it above.
-    DW3000NgClass::setTXAntennaDelay(16385);
+    // Antenna delay must be calibrated per board/antenna.
+    setAntennaDelay(16385);
 
     // Enable EXTTXE (GPIO5) and EXTRXE (GPIO6) for hardware debugging
     uint32_t gpio_mode = DW3000NgClass::read32(0x05, 0x00);
@@ -110,42 +112,42 @@ bool UWB_DW3000::configure(uint8_t channel, uint8_t preambleCode, uint16_t pream
     return true;
 }
 
-// Low-level SPI write for payload buffers using DW3000 SPI format (Forced 2-octet)
+bool UWB_DW3000::prepareTxFrame(const uint8_t* data, uint16_t length) {
+    if (length == 0 || length > 1021) {
+        return false;
+    }
 
+    DW3000NgClass::writeBytes(0x14, 0x00, data, length);
 
+    // TX_FCTRL is 48 bit. TX frame length includes the 2-byte FCS.
+    uint8_t tx_fctrl_bytes[6] = {0};
+    uint16_t txflen = (length + 2) & 0x3FF;
+    tx_fctrl_bytes[0] = txflen & 0xFF;
 
+    uint8_t plen = DW3000NgClass::config[1];
+    tx_fctrl_bytes[1] =
+        ((txflen >> 8) & 0x03) |
+        ((DW3000NgClass::config[4] & 0x01) << 2) |
+        (0 << 3) |
+        ((plen & 0x0F) << 4);
+    tx_fctrl_bytes[2] = 0x00;
+    tx_fctrl_bytes[3] = 0x00;
+    tx_fctrl_bytes[4] = 0x00;
+    tx_fctrl_bytes[5] = 0x00;
+
+    DW3000NgClass::writeBytes(0x00, 0x24, tx_fctrl_bytes, 6);
+    return true;
+}
 
 bool UWB_DW3000::transmit(const uint8_t* data, uint16_t length) {
     DW3000NgClass::writeFastCommand(0x00); // TXRXOFF
     delay(2); // Wait for transition to IDLE_PLL
     DW3000NgClass::writeFastCommand(0x12); // Clear all status bits via FAST COMMAND
-    
-    DW3000NgClass::writeBytes(0x14, 0x00, data, length);
-    
-    // Prepare TX_FCTRL (32-bit forced write)
-    // Bits 0-9:   txflen (length + 2)
-    // Bit 10:     txbr (0 = 6.8 Mbps)
-    // Bit 11:     tr (0 = non-ranging)
-    // Bits 16-25: txb_offset (0)
-    // Bits 26-29: txpsr (5 = 128 preamble)
-    // Prepare TX_FCTRL (48-bit register, write 6 bytes)
-    uint8_t tx_fctrl_bytes[6] = {0};
-    uint16_t txflen = (length + 2) & 0x3FF;
-    tx_fctrl_bytes[0] = txflen & 0xFF;
-    
-    uint8_t plen = DW3000NgClass::config[1];
-    tx_fctrl_bytes[1] = 
-        ((txflen >> 8) & 0x03) | 
-        ((DW3000NgClass::config[4] & 0x01) << 2) | 
-        (0 << 3) | 
-        ((plen & 0x0F) << 4);
-    tx_fctrl_bytes[2] = 0x00; // txb_offset
-    tx_fctrl_bytes[3] = 0x00; // txb_offset
-    tx_fctrl_bytes[4] = 0x00; 
-    tx_fctrl_bytes[5] = 0x00; // fine_plen = 0
 
-    DW3000NgClass::writeBytes(0x00, 0x24, tx_fctrl_bytes, 6);
-    
+    if (!prepareTxFrame(data, length)) {
+        return false;
+    }
+
     // Clear SYS_STATUS to make sure TXFRS is fresh
     DW3000NgClass::write32(0x00, 0x44, 0xFFFFFFFF);
     DW3000NgClass::write32(0x00, 0x48, 0xFFFFFFFF);
@@ -171,6 +173,56 @@ bool UWB_DW3000::transmit(const uint8_t* data, uint16_t length) {
     }
 
     return true;
+}
+
+uint64_t UWB_DW3000::calculateDelayedTransmitTimestamp(uint64_t referenceTimestamp, uint32_t delayUwbTicks) {
+    uint64_t target = (referenceTimestamp + (uint64_t)delayUwbTicks) & UWB40_MASK;
+    uint32_t delayedReg = (uint32_t)(target >> 8);
+    delayedReg &= 0xFFFFFFFEUL; // DW3000 ignores bit 0 of DX_TIME.
+    return ((((uint64_t)delayedReg) << 8) + (uint64_t)antennaDelay) & UWB40_MASK;
+}
+
+bool UWB_DW3000::transmitDelayedAt(const uint8_t* data, uint16_t length, uint64_t delayedTxTimestamp) {
+    uint64_t delayedStart = (delayedTxTimestamp - (uint64_t)antennaDelay) & UWB40_MASK;
+    uint32_t delayedReg = (uint32_t)(delayedStart >> 8);
+    delayedReg &= 0xFFFFFFFEUL;
+
+    dwt_forcetrxoff();
+    DW3000NgClass::write32(0x00, 0x44, 0xFFFFFFFF);
+    DW3000NgClass::write32(0x00, 0x48, 0xFFFFFFFF);
+
+    if (!prepareTxFrame(data, length)) {
+        return false;
+    }
+
+    dwt_setdelayedtrxtime(delayedReg);
+    if (dwt_starttx(DWT_START_TX_DELAYED) != DWT_SUCCESS) {
+        dwt_forcetrxoff();
+        return false;
+    }
+
+    uint32_t t0 = millis();
+    while (millis() - t0 < 100) {
+        uint32_t st_lo = DW3000NgClass::read32(0x00, 0x44);
+        if (st_lo & SYS_STATUS_TXFRS) {
+            DW3000NgClass::write32(0x00, 0x44, SYS_STATUS_TXFRS);
+            return true;
+        }
+    }
+
+    dwt_forcetrxoff();
+    return false;
+}
+
+void UWB_DW3000::setAntennaDelay(uint16_t delay) {
+    antennaDelay = delay;
+    DW3000NgClass::setTXAntennaDelay(delay);
+    dwt_settxantennadelay(delay);
+    dwt_setrxantennadelay(delay);
+}
+
+uint16_t UWB_DW3000::getTxAntennaDelay() {
+    return antennaDelay;
 }
 
 bool UWB_DW3000::startReceive() {

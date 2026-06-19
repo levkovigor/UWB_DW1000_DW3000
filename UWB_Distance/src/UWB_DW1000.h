@@ -15,6 +15,10 @@ public:
     virtual bool configure(uint8_t channel = 5, uint8_t preambleCode = 9, uint16_t preambleLength = 128, uint8_t dataRate = 1) override;
     
     virtual bool transmit(const uint8_t* data, uint16_t length) override;
+    virtual uint64_t calculateDelayedTransmitTimestamp(uint64_t referenceTimestamp, uint32_t delayUwbTicks) override;
+    virtual bool transmitDelayedAt(const uint8_t* data, uint16_t length, uint64_t delayedTxTimestamp) override;
+    virtual void setAntennaDelay(uint16_t delay) override;
+    virtual uint16_t getTxAntennaDelay() override;
     virtual bool startReceive() override;
     virtual bool readReceivedData(uint8_t* buffer, uint16_t& length) override;
 

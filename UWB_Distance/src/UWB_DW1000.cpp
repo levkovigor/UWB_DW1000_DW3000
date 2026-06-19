@@ -1,6 +1,17 @@
 #include "UWB_DW1000.h"
 #include "DW1000Ng.hpp"
 
+static constexpr uint64_t UWB40_MASK = 0xFFFFFFFFFFULL;
+static constexpr uint64_t UWB_DELAYED_TX_ALIGN_MASK = ~0x1FFULL; // DW1000 ignores the low 9 bits of DX_TIME.
+
+static void writeTimestamp40LE(byte out[5], uint64_t value) {
+    value &= UWB40_MASK;
+    for (uint8_t i = 0; i < 5; i++) {
+        out[i] = (byte)((value >> (8 * i)) & 0xFF);
+    }
+}
+
+
 UWB_DW1000* UWB_DW1000::_instance = nullptr;
 
 UWB_DW1000::UWB_DW1000() : _cs(-1), _irq(-1), _rst(-1), txDoneCallback(nullptr), rxDoneCallback(nullptr) {
@@ -86,6 +97,46 @@ bool UWB_DW1000::transmit(const uint8_t* data, uint16_t length) {
     DW1000Ng::setTransmitData((byte*)data, length);
     DW1000Ng::startTransmit();
     return true;
+}
+
+uint64_t UWB_DW1000::calculateDelayedTransmitTimestamp(uint64_t referenceTimestamp, uint32_t delayUwbTicks) {
+    uint64_t delayedStart = (referenceTimestamp + (uint64_t)delayUwbTicks) & UWB40_MASK;
+    delayedStart &= UWB_DELAYED_TX_ALIGN_MASK;
+    return (delayedStart + (uint64_t)DW1000Ng::getTxAntennaDelay()) & UWB40_MASK;
+}
+
+bool UWB_DW1000::transmitDelayedAt(const uint8_t* data, uint16_t length, uint64_t delayedTxTimestamp) {
+    uint64_t delayedStart = (delayedTxTimestamp - (uint64_t)DW1000Ng::getTxAntennaDelay()) & UWB40_MASK;
+    delayedStart &= UWB_DELAYED_TX_ALIGN_MASK;
+
+    byte delayedBytes[5];
+    writeTimestamp40LE(delayedBytes, delayedStart);
+
+    DW1000Ng::forceTRxOff();
+    DW1000Ng::setDelayedTRX(delayedBytes);
+    DW1000Ng::setTransmitData((byte*)data, length);
+    DW1000Ng::startTransmit(TransmitMode::DELAYED);
+
+    uint32_t t0 = millis();
+    while (!DW1000Ng::isTransmitDone()) {
+        if (millis() - t0 > 100) {
+            DW1000Ng::forceTRxOff();
+            return false;
+        }
+        #if defined(ESP8266) || defined(ESP32)
+        yield();
+        #endif
+    }
+    DW1000Ng::clearTransmitStatus();
+    return true;
+}
+
+void UWB_DW1000::setAntennaDelay(uint16_t delay) {
+    DW1000Ng::setAntennaDelay(delay);
+}
+
+uint16_t UWB_DW1000::getTxAntennaDelay() {
+    return DW1000Ng::getTxAntennaDelay();
 }
 
 bool UWB_DW1000::startReceive() {
