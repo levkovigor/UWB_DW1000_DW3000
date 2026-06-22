@@ -1,15 +1,15 @@
 #include <SPI.h>
-#include "src/UWB_Core.h"
+#include <UWB_Core.h>
 
 // IMPORTANT: Set to 1000 for DW1000, or 3000 for DW3000
 #define UWB_MODULE 1000
 
 #if UWB_MODULE == 3000
-#include "src/UWB_DW3000.h"
-#include "src/DW3000Ng/DW3000Ng.hpp"
+#include <UWB_DW3000.h>
+#include <DW3000Ng/DW3000Ng.hpp>
 UWB_DW3000 uwb;
 #else
-#include "src/UWB_DW1000.h"
+#include <UWB_DW1000.h>
 UWB_DW1000 uwb;
 #endif
 
